@@ -1,0 +1,282 @@
+/**
+	 * Request the password lock before displayed the main screen.
+	 */
+	private void requestPassword(final String pwd) {
+		new PassDialog(this, false, new android.os.Handler.Callback() {
+			public boolean handleMessage(Message msg) {
+				if (msg.obj == null) {
+					MainActivity.this.finish();
+					android.os.Process.killProcess(android.os.Process.myPid());
+					return false;
+				}
+				if (!pwd.equals(msg.obj)) {
+					requestPassword(pwd);
+					return false;
+				}
+				// Password correct
+				showOrLoadApplications();
+				return false;
+			}
+		}).show();
+	}
+
+	/**
+	 * Toggle iptables log enabled/disabled
+	 */
+	private void toggleLogEnabled() {
+		final SharedPreferences prefs = getSharedPreferences(Api.PREFS_NAME, 0);
+		final boolean enabled = !prefs.getBoolean(Api.PREF_LOGENABLED, false);
+		final Editor editor = prefs.edit();
+		editor.putBoolean(Api.PREF_LOGENABLED, enabled);
+		editor.commit();
+		if (Api.isEnabled(this)) {
+			Api.applySavedIptablesRules(this, true);
+		}
+		Toast.makeText(
+				MainActivity.this,
+				(enabled ? R.string.log_was_enabled : R.string.log_was_disabled),
+				Toast.LENGTH_SHORT).show();
+	}
+
+	/**
+	 * If the applications are cached, just show them, otherwise load and show
+	 */
+	private void showOrLoadApplications() {
+		final Resources res = getResources();
+		if (Api.applications == null) {
+			// The applications are not cached.. so lets display the progress
+			// dialog
+			final ProgressDialog progress = ProgressDialog.show(this,
+					res.getString(R.string.working),
+					res.getString(R.string.reading_apps), true);
+			final Handler handler = new Handler() {
+				public void handleMessage(Message msg) {
+					try {
+						progress.dismiss();
+					} catch (Exception ex) {
+					}
+					showApplications();
+				}
+			};
+			new Thread() {
+				public void run() {
+					Api.getApps(MainActivity.this);
+					handler.sendEmptyMessage(0);
+				}
+			}.start();
+		} else {
+			// the applications are cached, just show the list
+			showApplications();
+		}
+	}
+
+	/**
+	 * Show the list of applications
+	 */
+	private void showApplications() {
+		final DroidApp[] apps = Api.getApps(this);
+		// Sort applications - selected first, then alphabetically
+		Arrays.sort(apps, new Comparator<DroidApp>() {
+			@Override
+			public int compare(DroidApp o1, DroidApp o2) {
+				if ((o1.selected_wifi | o1.selected_3g) == (o2.selected_wifi | o2.selected_3g)) {
+					return String.CASE_INSENSITIVE_ORDER.compare(o1.names[0],
+							o2.names[0]);
+				}
+				if (o1.selected_wifi || o1.selected_3g)
+					return -1;
+				return 1;
+			}
+		});
+		final LayoutInflater inflater = getLayoutInflater();
+		final ListAdapter adapter = new ArrayAdapter<DroidApp>(this,
+				R.layout.listitem, R.id.app_text, apps) {
+			@Override
+			public View getView(int position, View convertView, ViewGroup parent) {
+				ListEntry entry;
+				if (convertView == null) {
+					// Inflate a new view
+					convertView = inflater.inflate(R.layout.listitem, parent,
+							false);
+					entry = new ListEntry();
+					entry.box_wifi = (CheckBox) convertView
+							.findViewById(R.id.itemcheck_wifi);
+					entry.box_3g = (CheckBox) convertView
+							.findViewById(R.id.itemcheck_3g);
+					entry.app_text = (TextView) convertView
+							.findViewById(R.id.app_text);
+					entry.upload = (TextView) convertView
+							.findViewById(R.id.upload);
+					entry.download = (TextView) convertView
+							.findViewById(R.id.download);
+					convertView.setTag(entry);
+					entry.box_wifi
+							.setOnCheckedChangeListener(MainActivity.this);
+					entry.box_3g.setOnCheckedChangeListener(MainActivity.this);
+				} else {
+					// Convert an existing view
+					entry = (ListEntry) convertView.getTag();
+				}
+				final DroidApp app = apps[position];
+				entry.app_text.setText(app.toString());
+				convertAndSetColor(TrafficStats.getUidTxBytes(app.uid),
+						entry.upload);
+				convertAndSetColor(TrafficStats.getUidRxBytes(app.uid),
+						entry.download);
+				final CheckBox box_wifi = entry.box_wifi;
+				box_wifi.setTag(app);
+				box_wifi.setChecked(app.selected_wifi);
+				final CheckBox box_3g = entry.box_3g;
+				box_3g.setTag(app);
+				box_3g.setChecked(app.selected_3g);
+				return convertView;
+			}
+
+			
+
+	@Override
+	public boolean onCreateOptionsMenu(Menu menu) {
+		menu.add(0, MENU_DISABLE, 0, R.string.fw_enabled).setIcon(
+				android.R.drawable.button_onoff_indicator_on);
+		menu.add(0, MENU_TOGGLELOG, 0, R.string.log_enabled).setIcon(
+				android.R.drawable.button_onoff_indicator_on);
+		menu.add(0, MENU_APPLY, 0, R.string.applyrules).setIcon(
+				R.drawable.apply);
+		menu.add(0, MENU_EXIT, 0, R.string.exit).setIcon(
+				android.R.drawable.ic_menu_close_clear_cancel);
+		menu.add(0, MENU_TRAFFIC, 0, R.string.traffic).setIcon(
+				android.R.drawable.ic_menu_info_details);
+		menu.add(0, MENU_HELP, 0, R.string.help).setIcon(
+				android.R.drawable.ic_menu_help);
+		menu.add(0, MENU_SHOWLOG, 0, R.string.show_log)
+				.setIcon(R.drawable.show);
+		menu.add(0, MENU_SHOWRULES, 0, R.string.showrules).setIcon(
+				R.drawable.show);
+		menu.add(0, MENU_CLEARLOG, 0, R.string.clear_log).setIcon(
+				android.R.drawable.ic_menu_close_clear_cancel);
+		menu.add(0, MENU_SETPWD, 0, R.string.setpwd).setIcon(
+				android.R.drawable.ic_lock_lock);
+
+		return true;
+	}
+
+	@Override
+	public boolean onPrepareOptionsMenu(Menu menu) {
+		final MenuItem item_onoff = menu.getItem(MENU_DISABLE);
+		final MenuItem item_apply = menu.getItem(MENU_APPLY);
+		final boolean enabled = Api.isEnabled(this);
+		if (enabled) {
+			item_onoff.setIcon(android.R.drawable.button_onoff_indicator_on);
+			item_onoff.setTitle(R.string.fw_enabled);
+			item_apply.setTitle(R.string.applyrules);
+		} else {
+			item_onoff.setIcon(android.R.drawable.button_onoff_indicator_off);
+			item_onoff.setTitle(R.string.fw_disabled);
+			item_apply.setTitle(R.string.saverules);
+		}
+		final MenuItem item_log = menu.getItem(MENU_TOGGLELOG);
+		final boolean logenabled = getSharedPreferences(Api.PREFS_NAME, 0)
+				.getBoolean(Api.PREF_LOGENABLED, false);
+		if (logenabled) {
+			item_log.setIcon(android.R.drawable.button_onoff_indicator_on);
+			item_log.setTitle(R.string.log_enabled);
+		} else {
+			item_log.setIcon(android.R.drawable.button_onoff_indicator_off);
+			item_log.setTitle(R.string.log_disabled);
+		}
+		return super.onPrepareOptionsMenu(menu);
+	}
+
+	@Override
+	public boolean onMenuItemSelected(int featureId, MenuItem item) {
+		switch (item.getItemId()) {
+		case MENU_DISABLE:
+			disableOrEnable();
+			return true;
+		case MENU_TOGGLELOG:
+			toggleLogEnabled();
+			return true;
+		case MENU_APPLY:
+			applyOrSaveRules();
+			return true;
+		case MENU_EXIT:
+			finish();
+			System.exit(0);
+			return true;
+		case MENU_TRAFFIC:
+			showTrafficDialog();
+			return true;
+		case MENU_HELP:
+			new HelpDialog(this).show();
+			return true;
+		case MENU_SETPWD:
+			setPassword();
+			return true;
+		case MENU_SHOWLOG:
+			showLog();
+			return true;
+		case MENU_SHOWRULES:
+			showRules();
+			return true;
+		case MENU_CLEARLOG:
+			clearLog();
+			return true;
+		}
+		return false;
+	}
+private void showTrafficDialog() {
+		String message = null;
+		long[] trafficArray = Api.showTraffic(this);
+		if (trafficArray != null) {
+			message = "当月已使用：" + unitHandler(trafficArray[0]) + "\n已接收："
+					+ unitHandler(trafficArray[1]) + "\n已发送："
+					+ unitHandler(trafficArray[2]);
+		} else {
+			message = "对不起，您可能还没产生流量，或者您的设备不支持该功能。";
+		}
+		Api.alert(this, message);
+	}
+
+	private String unitHandler(long count) {
+		String value = null;
+		long temp = count;
+		float floatnum = count;
+		if ((temp = temp / 1000) < 1) {
+			value = count + "B";
+		} else if ((floatnum = (float)temp / 1000) < 1) {
+			value = temp + "KB";
+		} else {
+			DecimalFormat format = new DecimalFormat("0.#");
+			value = format.format(floatnum) + "MB";
+		}
+		return value;
+	}
+
+	/**
+	 * Enables or disables the firewall
+	 */
+	private void disableOrEnable() {
+		final boolean enabled = !Api.isEnabled(this);
+		Log.d("DroidWall", "Changing enabled status to: " + enabled);
+		Api.setEnabled(this, enabled);
+		if (enabled) {
+			applyOrSaveRules();
+		} else {
+			purgeRules();
+		}
+		refreshHeader();
+	}
+
+	/**
+	 * Set a new lock password
+	 */
+	private void setPassword() {
+		new PassDialog(this, true, new android.os.Handler.Callback() {
+			public boolean handleMessage(Message msg) {
+				if (msg.obj != null) {
+					setPassword((String) msg.obj);
+				}
+				return false;
+			}
+		}).show();
+	}
