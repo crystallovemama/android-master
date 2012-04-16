@@ -1,0 +1,182 @@
+import java.text.DecimalFormat;
+import java.util.Arrays;
+import java.util.Comparator;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.app.ProgressDialog;
+import android.content.DialogInterface;
+import android.content.SharedPreferences;
+import android.content.SharedPreferences.Editor;
+import android.content.res.Resources;
+import android.net.TrafficStats;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Message;
+import android.util.Log;
+import android.view.LayoutInflater;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.View.OnClickListener;
+import android.widget.ArrayAdapter;
+import android.widget.CheckBox;
+import android.widget.CompoundButton;
+import android.widget.ListAdapter;
+import android.widget.ListView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+
+/**
+ * Main application activity. This is the screen displayed when you open the
+ * application
+ */
+public class MainActivity extends Activity implements OnCheckedChangeListener,
+		OnClickListener {
+
+	// Menu options
+	private static final int MENU_DISABLE = 0;
+	private static final int MENU_TOGGLELOG = 1;
+	private static final int MENU_APPLY = 2;
+	private static final int MENU_EXIT = 3;
+	private static final int MENU_TRAFFIC = 4;
+	private static final int MENU_HELP = 5;
+	private static final int MENU_SHOWLOG = 6;
+	private static final int MENU_SHOWRULES = 7;
+	private static final int MENU_CLEARLOG = 8;
+	private static final int MENU_SETPWD = 9;
+
+	/** progress dialog instance */
+	private ListView listview;
+
+	/** Called when the activity is first created. */
+	@Override
+	public void onCreate(Bundle savedInstanceState) {
+		super.onCreate(savedInstanceState);
+		checkPreferences();
+		setContentView(R.layout.main);
+		this.findViewById(R.id.label_mode).setOnClickListener(this);
+		Api.assertBinaries(this, true);
+	}
+
+	@Override
+	protected void onStart() {
+		super.onStart();
+		// Force re-loading the application list
+		Log.d("DroidWall", "onStart() - Forcing APP list reload!");
+		Api.applications = null;
+	}
+
+	@Override
+	protected void onResume() {
+		super.onResume();
+		if (this.listview == null) {
+			this.listview = (ListView) this.findViewById(R.id.listview);
+		}
+		refreshHeader();
+		final String pwd = getSharedPreferences(Api.PREFS_NAME, 0).getString(
+				Api.PREF_PASSWORD, "");
+		if (pwd.length() == 0) {
+			// No password lock
+			showOrLoadApplications();
+		} else {
+			// Check the password
+			requestPassword(pwd);
+		}
+	}
+
+	@Override
+	protected void onPause() {
+		super.onPause();
+		this.listview.setAdapter(null);
+	}
+
+	/**
+	 * Check if the stored preferences are OK
+	 */
+	private void checkPreferences() {
+		final SharedPreferences prefs = getSharedPreferences(Api.PREFS_NAME, 0);
+		final Editor editor = prefs.edit();
+		boolean changed = false;
+		if (prefs.getString(Api.PREF_MODE, "").length() == 0) {
+			editor.putString(Api.PREF_MODE, Api.MODE_WHITELIST);
+			changed = true;
+		}
+		/* delete the old preference names */
+		if (prefs.contains("AllowedUids")) {
+			editor.remove("AllowedUids");
+			changed = true;
+		}
+		if (prefs.contains("Interfaces")) {
+			editor.remove("Interfaces");
+			changed = true;
+		}
+		if (changed)
+			editor.commit();
+	}
+
+	/**
+	 * Refresh informative header
+	 */
+	private void refreshHeader() {
+		final SharedPreferences prefs = getSharedPreferences(Api.PREFS_NAME, 0);
+		final String mode = prefs.getString(Api.PREF_MODE, Api.MODE_WHITELIST);
+		final TextView labelmode = (TextView) this
+				.findViewById(R.id.label_mode);
+		final Resources res = getResources();
+		int resid = (mode.equals(Api.MODE_WHITELIST) ? R.string.mode_whitelist
+				: R.string.mode_blacklist);
+		labelmode.setText(res.getString(R.string.mode_header,
+				res.getString(resid)));
+		resid = (Api.isEnabled(this) ? R.string.title_enabled
+				: R.string.title_disabled);
+		setTitle(res.getString(resid, Api.VERSION));
+	}
+
+	/**
+	 * Displays a dialog box to select the operation mode (black or white list)
+	 */
+	private void selectMode() {
+		final Resources res = getResources();
+		new AlertDialog.Builder(this)
+				.setItems(
+						new String[] { res.getString(R.string.mode_whitelist),
+								res.getString(R.string.mode_blacklist) },
+						new DialogInterface.OnClickListener() {
+							public void onClick(DialogInterface dialog,
+									int which) {
+								final String mode = (which == 0 ? Api.MODE_WHITELIST
+										: Api.MODE_BLACKLIST);
+								final Editor editor = getSharedPreferences(
+										Api.PREFS_NAME, 0).edit();
+								editor.putString(Api.PREF_MODE, mode);
+								editor.commit();
+								refreshHeader();
+							}
+						}).setTitle("Select mode:").show();
+	}
+
+/**
+	 * Set a new password lock
+	 *
+	 * @param pwd
+	 *            new password (empty to remove the lock)
+	 */
+	private void setPassword(String pwd) {
+		final Resources res = getResources();
+		final Editor editor = getSharedPreferences(Api.PREFS_NAME, 0).edit();
+		editor.putString(Api.PREF_PASSWORD, pwd);
+		String msg;
+		if (editor.commit()) {
+			if (pwd.length() > 0) {
+				msg = res.getString(R.string.passdefined);
+			} else {
+				msg = res.getString(R.string.passremoved);
+			}
+		} else {
+			msg = res.getString(R.string.passerror);
+		}
+		Toast.makeText(MainActivity.this, msg, Toast.LENGTH_SHORT).show();
+	}
